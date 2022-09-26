@@ -10,6 +10,7 @@ using UnityEngine.InputSystem;
 namespace StarterAssets
 {
     [RequireComponent(typeof(CharacterController))]
+    [RequireComponent(typeof(CharacterAnimatorController))]
     public class ThirdPersonController : NetworkBehaviour
     {
         [Header("Player")]
@@ -91,27 +92,20 @@ namespace StarterAssets
         private float _jumpTimeoutDelta;
         private float _fallTimeoutDelta;
 
-        // animation IDs
-        private int _animIDSpeed;
-        private int _animIDGrounded;
-        private int _animIDJump;
-        private int _animIDFreeFall;
-        private int _animIDMotionSpeed;
-
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
         private PlayerInput _playerInput;
 #endif
-        private Animator _animator;
         private CharacterController _controller;
         private StarterAssetsInputs _input;
         private GameObject _mainCamera;
+        private CharacterAnimatorController _characterAnimatorController;
 
         private const float _threshold = 0.01f;
 
-        private bool _hasAnimator;
-
         public NetworkVariable<Vector3> Position = new NetworkVariable<Vector3>();
         public NetworkVariable<Quaternion> Rotation = new NetworkVariable<Quaternion>();
+        public NetworkVariable<float> AnimSpeed = new NetworkVariable<float>();
+        public NetworkVariable<float> AnimMotionSpeed = new NetworkVariable<float>();
 
         private bool IsCurrentDeviceMouse
         {
@@ -139,7 +133,6 @@ namespace StarterAssets
         {
             _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
             
-            _hasAnimator = TryGetComponent(out _animator);
             _controller = GetComponent<CharacterController>();
             _input = StarterAssetsInputs.Singleton;
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
@@ -148,7 +141,7 @@ namespace StarterAssets
 			Debug.LogError( "Starter Assets package is missing dependencies. Please use Tools/Starter Assets/Reinstall Dependencies to fix it");
 #endif
 
-            AssignAnimationIDs();
+            _characterAnimatorController = GetComponent<CharacterAnimatorController>();
 
             // reset our timeouts on start
             _jumpTimeoutDelta = JumpTimeout;
@@ -163,8 +156,6 @@ namespace StarterAssets
 
         private void Update()
         {
-            _hasAnimator = TryGetComponent(out _animator);
-
             if (IsOwner)
             {
                 JumpAndGravity();
@@ -188,21 +179,13 @@ namespace StarterAssets
                 // 自分以外はServerの値を正として適用する
                 transform.position = Position.Value;
                 transform.rotation = Rotation.Value;
+                _characterAnimatorController.SetSpeedAndMotionSpeed(AnimSpeed.Value, AnimMotionSpeed.Value);
             }
         }
 
         private void LateUpdate()
         {
             CameraRotation();
-        }
-
-        private void AssignAnimationIDs()
-        {
-            _animIDSpeed = Animator.StringToHash("Speed");
-            _animIDGrounded = Animator.StringToHash("Grounded");
-            _animIDJump = Animator.StringToHash("Jump");
-            _animIDFreeFall = Animator.StringToHash("FreeFall");
-            _animIDMotionSpeed = Animator.StringToHash("MotionSpeed");
         }
 
         private void GroundedCheck()
@@ -214,10 +197,8 @@ namespace StarterAssets
                 QueryTriggerInteraction.Ignore);
 
             // update animator if using character
-            if (_hasAnimator)
-            {
-                _animator.SetBool(_animIDGrounded, Grounded);
-            }
+            _characterAnimatorController.SetGrounded(Grounded);
+            SubmitGroundedAnimRequestServerRpc(Grounded);
         }
 
         private void CameraRotation()
@@ -302,11 +283,8 @@ namespace StarterAssets
                              new Vector3(0.0f, _verticalVelocity, 0.0f) * Time.deltaTime);
 
             // update animator if using character
-            if (_hasAnimator)
-            {
-                _animator.SetFloat(_animIDSpeed, _animationBlend);
-                _animator.SetFloat(_animIDMotionSpeed, inputMagnitude);
-            }
+            _characterAnimatorController.SetSpeedAndMotionSpeed(_animationBlend, inputMagnitude);
+            SubmitSetSpeedAndMotionSpeedAnimRequestServerRpc(_animationBlend, inputMagnitude);
         }
 
         private void JumpAndGravity()
@@ -317,11 +295,8 @@ namespace StarterAssets
                 _fallTimeoutDelta = FallTimeout;
 
                 // update animator if using character
-                if (_hasAnimator)
-                {
-                    _animator.SetBool(_animIDJump, false);
-                    _animator.SetBool(_animIDFreeFall, false);
-                }
+                _characterAnimatorController.EndJumpAndFreeFall();
+                SubmitEndJumpAndFreeFallAnimRequestServerRpc();
 
                 // stop our velocity dropping infinitely when grounded
                 if (_verticalVelocity < 0.0f)
@@ -336,10 +311,8 @@ namespace StarterAssets
                     _verticalVelocity = Mathf.Sqrt(JumpHeight * -2f * Gravity);
 
                     // update animator if using character
-                    if (_hasAnimator)
-                    {
-                        _animator.SetBool(_animIDJump, true);
-                    }
+                    _characterAnimatorController.StartJump();
+                    SubmitStartJumpAnimRequestServerRpc();
                 }
 
                 // jump timeout
@@ -361,10 +334,8 @@ namespace StarterAssets
                 else
                 {
                     // update animator if using character
-                    if (_hasAnimator)
-                    {
-                        _animator.SetBool(_animIDFreeFall, true);
-                    }
+                    _characterAnimatorController.StartFreeFall();
+                    SubmitStartFreeFallAnimRequestServerRpc();
                 }
 
                 // if we are not grounded, do not jump
@@ -438,6 +409,69 @@ namespace StarterAssets
         {
             Position.Value = position;
             Rotation.Value = rotation;
+        }
+
+        [ServerRpc]
+        void SubmitSetSpeedAndMotionSpeedAnimRequestServerRpc(float animationBlend, float inputMagnitude)
+        {
+            AnimSpeed.Value = animationBlend;
+            AnimMotionSpeed.Value = inputMagnitude;
+        }
+
+        [ServerRpc]
+        void SubmitStartJumpAnimRequestServerRpc()
+        {
+            _characterAnimatorController.StartJump();
+            SubmitStartJumpAnimRequestClientRpc();
+        }
+
+        [ClientRpc]
+        void SubmitStartJumpAnimRequestClientRpc()
+        {
+            if (!IsOwner)
+                _characterAnimatorController.StartJump();
+        }
+
+        [ServerRpc]
+        void SubmitStartFreeFallAnimRequestServerRpc()
+        {
+            _characterAnimatorController.StartFreeFall();
+            SubmitStartFreeFallAnimRequestClientRpc();
+        }
+
+        [ClientRpc]
+        void SubmitStartFreeFallAnimRequestClientRpc()
+        {
+            if (!IsOwner)
+                _characterAnimatorController.StartFreeFall();
+        }
+
+        [ServerRpc]
+        void SubmitEndJumpAndFreeFallAnimRequestServerRpc()
+        {
+            _characterAnimatorController.EndJumpAndFreeFall();
+            SubmitEndJumpAndFreeFallAnimRequestClientRpc();
+        }
+
+        [ClientRpc]
+        void SubmitEndJumpAndFreeFallAnimRequestClientRpc()
+        {
+            if (!IsOwner)
+                _characterAnimatorController.EndJumpAndFreeFall();
+        }
+
+        [ServerRpc]
+        void SubmitGroundedAnimRequestServerRpc(bool grounded)
+        {
+            _characterAnimatorController.SetGrounded(grounded);
+            SubmitGroundedAnimRequestClientRpc(grounded);
+        }
+
+        [ClientRpc]
+        void SubmitGroundedAnimRequestClientRpc(bool grounded)
+        {
+            if (!IsOwner)
+                _characterAnimatorController.SetGrounded(grounded);
         }
     }
 }
