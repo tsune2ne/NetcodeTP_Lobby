@@ -7,6 +7,13 @@ namespace StarterAssets
 {
 	public class StarterAssetsInputs : MonoBehaviour
 	{
+		public static StarterAssetsInputs Singleton { get; private set; }
+
+		private void Start()
+		{
+			Singleton = this;
+		}
+
 		[Header("Character Input Values")]
 		public Vector2 move;
 		public Vector2 look;
