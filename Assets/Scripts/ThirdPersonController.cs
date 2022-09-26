@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using Unity.Netcode;
+using UnityEngine;
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
 using UnityEngine.InputSystem;
 #endif
@@ -9,7 +10,7 @@ using UnityEngine.InputSystem;
 namespace StarterAssets
 {
     [RequireComponent(typeof(CharacterController))]
-    public class ThirdPersonController : MonoBehaviour
+    public class ThirdPersonController : NetworkBehaviour
     {
         [Header("Player")]
         [Tooltip("Move speed of the character in m/s")]
@@ -109,6 +110,9 @@ namespace StarterAssets
 
         private bool _hasAnimator;
 
+        public NetworkVariable<Vector3> Position = new NetworkVariable<Vector3>();
+        public NetworkVariable<Quaternion> Rotation = new NetworkVariable<Quaternion>();
+
         private bool IsCurrentDeviceMouse
         {
             get
@@ -150,17 +154,41 @@ namespace StarterAssets
             _jumpTimeoutDelta = JumpTimeout;
             _fallTimeoutDelta = FallTimeout;
 
-            // カメラに自分を設定
-            PlayerFollowCamera.Singleton.SetTarget(CameraRoot);
+            if (IsOwner)
+            {
+                // カメラに自分を設定
+                PlayerFollowCamera.Singleton.SetTarget(CameraRoot);
+            }
         }
 
         private void Update()
         {
             _hasAnimator = TryGetComponent(out _animator);
 
-            JumpAndGravity();
-            GroundedCheck();
-            Move();
+            if (IsOwner)
+            {
+                JumpAndGravity();
+                GroundedCheck();
+                Move();
+
+                if (NetworkManager.Singleton.IsServer)
+                {
+                    // Serverの値をClientに共有する
+                    Position.Value = transform.position;
+                    Rotation.Value = transform.rotation;
+                }
+                else
+                {
+                    // 自分の変更をServerに通知する
+                    SubmitPositionRequestServerRpc(transform.position, transform.rotation);
+                }
+            }
+            else
+            {
+                // 自分以外はServerの値を正として適用する
+                transform.position = Position.Value;
+                transform.rotation = Rotation.Value;
+            }
         }
 
         private void LateUpdate()
@@ -389,6 +417,27 @@ namespace StarterAssets
             {
                 AudioSource.PlayClipAtPoint(LandingAudioClip, transform.TransformPoint(_controller.center), FootstepAudioVolume);
             }
+        }
+
+        public override void OnNetworkSpawn()
+        {
+            if (IsOwner)
+                if (NetworkManager.Singleton.IsServer)
+                {
+                    Position.Value = transform.position;
+                    Rotation.Value = transform.rotation;
+                }
+                else
+                {
+                    SubmitPositionRequestServerRpc(transform.position, transform.rotation);
+                }
+        }
+
+        [ServerRpc]
+        void SubmitPositionRequestServerRpc(Vector3 position, Quaternion rotation)
+        {
+            Position.Value = position;
+            Rotation.Value = rotation;
         }
     }
 }
