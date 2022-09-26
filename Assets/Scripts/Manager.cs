@@ -3,6 +3,13 @@ using UnityEngine;
 
 public class Manager : MonoBehaviour
 {
+    private void Start()
+    {
+#if UNITY_SERVER
+        NetworkManager.Singleton.StartServer();
+#endif
+    }
+
     void OnGUI()
     {
         GUILayout.BeginArea(new Rect(10, 10, 300, 300));
